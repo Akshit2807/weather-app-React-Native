@@ -2,15 +2,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Dimensions,
   FlatList,
   Keyboard,
-  Linking,
-  Platform,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -20,8 +18,9 @@ import {
   TextInput,
   TouchableOpacity,
   TouchableWithoutFeedback,
-  View,
+  View
 } from 'react-native';
+import MapView, { Marker, Region } from 'react-native-maps';
 import Animated, {
   FadeIn,
   interpolate,
@@ -31,7 +30,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useWeather } from '../../context/WeatherContext';
 
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 
 interface CitySuggestion {
   name: string;
@@ -44,6 +43,7 @@ interface CitySuggestion {
 export default function WeatherScreen() {
   const [searchInput, setSearchInput] = useState('');
   const [showMap, setShowMap] = useState(false);
+  const [mapRegion, setMapRegion] = useState<Region | null>(null);
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [markerCoords, setMarkerCoords] = useState<{latitude: number, longitude: number} | null>(null);
   const [citySuggestions, setCitySuggestions] = useState<CitySuggestion[]>([]);
@@ -52,8 +52,10 @@ export default function WeatherScreen() {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [mapMoving, setMapMoving] = useState(false);
   
+  const mapRef = useRef<MapView>(null);
   const searchInputRef = useRef<TextInput>(null);
   const debounceTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mapMoveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
   
   // Animated values
@@ -77,6 +79,12 @@ export default function WeatherScreen() {
 
   useEffect(() => {
     if (weather?.coord) {
+      setMapRegion({
+        latitude: weather.coord.lat,
+        longitude: weather.coord.lon,
+        latitudeDelta: 0.1,
+        longitudeDelta: 0.1,
+      });
       setMarkerCoords({
         latitude: weather.coord.lat,
         longitude: weather.coord.lon,
@@ -188,35 +196,42 @@ export default function WeatherScreen() {
     mapAnimation.value = withSpring(showMap ? 0 : 1, { damping: 15, stiffness: 150 });
   };
 
-  const openInMaps = () => {
-    if (!markerCoords) return;
+  const handleMapPress = useCallback((event: any) => {
+    const { latitude, longitude } = event.nativeEvent.coordinate;
+    setMarkerCoords({ latitude, longitude });
+    setMapMoving(true);
     
-    const { latitude, longitude } = markerCoords;
-    const label = weather?.name || 'Weather Location';
-    
-    const scheme = Platform.select({
-      ios: `maps:0,0?q=${label}@${latitude},${longitude}`,
-      android: `geo:0,0?q=${latitude},${longitude}(${label})`,
-    });
-    
-    if (scheme) {
-      Linking.openURL(scheme).catch(() => {
-        // Fallback to Google Maps web
-        const url = `https://www.google.com/maps?q=${latitude},${longitude}`;
-        Linking.openURL(url);
-      });
+    if (mapMoveTimeout.current) {
+      clearTimeout(mapMoveTimeout.current);
     }
-  };
+    
+    mapMoveTimeout.current = setTimeout(async () => {
+      try {
+        await fetchWeatherByCoords(latitude, longitude);
+        setMapMoving(false);
+      } catch (error) {
+        setMapMoving(false);
+      }
+    }, 800);
+  }, [fetchWeatherByCoords]);
 
   const getCurrentLocation = async () => {
     try {
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
+      const newRegion = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        latitudeDelta: 0.1,
+        longitudeDelta: 0.1,
+      };
+      setMapRegion(newRegion);
       setMarkerCoords({
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
       });
+      mapRef.current?.animateToRegion(newRegion, 1000);
       await fetchWeatherByCoords(location.coords.latitude, location.coords.longitude);
     } catch (error) {
       Alert.alert('Error', 'Could not get current location');
@@ -488,40 +503,49 @@ export default function WeatherScreen() {
           {/* Map Toggle Button */}
           <Animated.View entering={FadeIn.delay(400)} style={styles.mapToggleContainer}>
             <TouchableOpacity style={styles.mapToggleButton} onPress={toggleMap}>
-              <Ionicons name={showMap ? "location" : "map"} size={20} color="#FFFFFF" />
+              <Ionicons name={showMap ? "list" : "map"} size={20} color="#FFFFFF" />
               <Text style={styles.mapToggleText}>
-                {showMap ? "Hide Location" : "Show Location"}
+                {showMap ? "Hide Map" : "Show Map"}
               </Text>
             </TouchableOpacity>
           </Animated.View>
 
-          {/* Location Info */}
-          <Animated.View style={[styles.locationContainer, mapAnimatedStyle]}>
-            {showMap && markerCoords && (
-              <View style={styles.locationInfo}>
-                <View style={styles.locationHeaderInfo}>
-                  <Ionicons name="location" size={24} color="#FFFFFF" />
-                  <Text style={styles.locationTitle}>Current Location</Text>
-                </View>
-                
-                <View style={styles.coordinatesContainer}>
-                  <Text style={styles.coordinatesText}>
-                    {markerCoords.latitude.toFixed(4)}°, {markerCoords.longitude.toFixed(4)}°
-                  </Text>
-                </View>
-                
-                <View style={styles.locationActions}>
-                  <TouchableOpacity style={styles.actionButton} onPress={openInMaps}>
-                    <Ionicons name="map-outline" size={18} color="#007AFF" />
-                    <Text style={styles.actionButtonText}>Open in Maps</Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity style={styles.actionButton} onPress={getCurrentLocation}>
-                    <Ionicons name="locate-outline" size={18} color="#007AFF" />
-                    <Text style={styles.actionButtonText}>Update Location</Text>
-                  </TouchableOpacity>
-                </View>
+          {/* Google Maps Container */}
+          <Animated.View style={[styles.mapContainer, mapAnimatedStyle]}>
+            {mapRegion && showMap && (
+              <MapView
+                ref={mapRef}
+                style={styles.map}
+                initialRegion={mapRegion}
+                onPress={handleMapPress}
+                showsUserLocation={true}
+                showsMyLocationButton={false}
+                scrollEnabled={true}
+                zoomEnabled={true}
+                rotateEnabled={false}
+                pitchEnabled={false}
+              >
+                {markerCoords && (
+                  <Marker coordinate={markerCoords}>
+                    <View style={styles.customMarker}>
+                      <Ionicons name="location" size={30} color="#FF6B6B" />
+                    </View>
+                  </Marker>
+                )}
+              </MapView>
+            )}
+            
+            {mapMoving && showMap && (
+              <View style={styles.mapLoadingOverlay}>
+                <ActivityIndicator size="small" color="#FFFFFF" />
+                <Text style={styles.mapLoadingText}>Loading weather...</Text>
               </View>
+            )}
+            
+            {showMap && (
+              <TouchableOpacity style={styles.locateButton} onPress={getCurrentLocation}>
+                <Ionicons name="locate" size={20} color="#007AFF" />
+              </TouchableOpacity>
             )}
           </Animated.View>
         </ScrollView>
@@ -550,6 +574,7 @@ const styles = StyleSheet.create({
   },
   safeArea: {
     flex: 1,
+    paddingTop : 35,
   },
   loaderContainer: {
     flex: 1,
@@ -719,57 +744,47 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
   },
-  locationContainer: {
-    marginHorizontal: 20,
-    marginBottom: 20,
+  map: {
+    height: 300,
   },
-  locationInfo: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  locationHeaderInfo: {
-    flexDirection: 'row',
+  customMarker: {
     alignItems: 'center',
-    marginBottom: 15,
+    justifyContent: 'center',
   },
-  locationTitle: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '600',
-    marginLeft: 10,
-  },
-  coordinatesContainer: {
-    marginBottom: 20,
-  },
-  coordinatesText: {
-    color: '#FFFFFF80',
-    fontSize: 16,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    textAlign: 'center',
-  },
-  locationActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  actionButton: {
-    flex: 1,
+  mapLoadingOverlay: {
+    position: 'absolute',
+    top: 15,
+    left: 15,
+    right: 15,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 15,
-    paddingVertical: 12,
-    paddingHorizontal: 15,
   },
-  actionButtonText: {
-    color: '#007AFF',
-    fontSize: 14,
-    fontWeight: '600',
-    marginLeft: 6,
+  mapLoadingText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    marginLeft: 8,
+    fontWeight: '500',
+  },
+  locateButton: {
+    position: 'absolute',
+    bottom: 15,
+    right: 15,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 25,
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
   },
   searchOverlay: {
     position: 'absolute',
