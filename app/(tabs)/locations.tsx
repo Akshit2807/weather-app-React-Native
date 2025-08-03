@@ -1,37 +1,74 @@
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
-import React, { useEffect, useState } from 'react';
+import { router } from 'expo-router';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-    Alert,
-    FlatList,
-    SafeAreaView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  FlatList,
+  Modal,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  TouchableWithoutFeedback,
+  View
 } from 'react-native';
-import Animated, { FadeIn } from 'react-native-reanimated';
+import Animated, {
+  FadeIn,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring
+} from 'react-native-reanimated';
 import { useWeather } from '../../context/WeatherContext';
+
+const { width } = Dimensions.get('window');
 
 interface SavedLocation {
   id: string;
   name: string;
   country?: string;
+  state?: string;
   lat: number;
   lon: number;
   temperature: number;
   condition: string;
   icon: string;
   isCurrentLocation?: boolean;
+  dateAdded: number;
 }
+
+interface CitySuggestion {
+  name: string;
+  country: string;
+  lat: number;
+  lon: number;
+  state?: string;
+}
+
+const STORAGE_KEY = '@weather_saved_locations';
 
 export default function LocationsScreen() {
   const [savedLocations, setSavedLocations] = useState<SavedLocation[]>([]);
   const [currentLocationWeather, setCurrentLocationWeather] = useState<SavedLocation | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [searchInput, setSearchInput] = useState('');
+  const [citySuggestions, setCitySuggestions] = useState<CitySuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+  const [isLoadingCurrentLocation, setIsLoadingCurrentLocation] = useState(true);
+  const [isUpdatingWeather, setIsUpdatingWeather] = useState(false);
   
   const { fetchWeatherByCoords, unit } = useWeather();
-
+  
+  // Animation values
+  const modalScale = useSharedValue(0);
+  
   useEffect(() => {
     loadCurrentLocation();
     loadSavedLocations();
@@ -41,65 +78,207 @@ export default function LocationsScreen() {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status === 'granted') {
-        const location = await Location.getCurrentPositionAsync({});
+        const location = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        
         // Fetch weather for current location
         const response = await fetch(
           `https://api.openweathermap.org/data/2.5/weather?lat=${location.coords.latitude}&lon=${location.coords.longitude}&appid=dd3eed2b572cd5929a9f50b77007248d&units=metric`
         );
-        const data = await response.json();
         
-        setCurrentLocationWeather({
-          id: 'current',
-          name: data.name,
-          country: data.sys?.country,
-          lat: location.coords.latitude,
-          lon: location.coords.longitude,
-          temperature: Math.round(data.main.temp),
-          condition: data.weather[0].main,
-          icon: data.weather[0].icon,
-          isCurrentLocation: true,
-        });
+        if (response.ok) {
+          const data = await response.json();
+          
+          setCurrentLocationWeather({
+            id: 'current',
+            name: data.name,
+            country: data.sys?.country,
+            lat: location.coords.latitude,
+            lon: location.coords.longitude,
+            temperature: Math.round(data.main.temp),
+            condition: data.weather[0].main,
+            icon: data.weather[0].icon,
+            isCurrentLocation: true,
+            dateAdded: Date.now(),
+          });
+        }
       }
     } catch (error) {
       console.error('Error loading current location:', error);
+    } finally {
+      setIsLoadingCurrentLocation(false);
     }
   };
 
-  const loadSavedLocations = () => {
-    // Mock saved locations - in real app, load from AsyncStorage
-    const mockLocations: SavedLocation[] = [
-      {
-        id: '1',
-        name: 'New York',
-        country: 'US',
-        lat: 40.7128,
-        lon: -74.0060,
-        temperature: 22,
-        condition: 'Clear',
-        icon: '01d',
-      },
-      {
-        id: '2',
-        name: 'London',
-        country: 'GB',
-        lat: 51.5074,
-        lon: -0.1278,
-        temperature: 15,
-        condition: 'Clouds',
-        icon: '03d',
-      },
-      {
-        id: '3',
-        name: 'Tokyo',
-        country: 'JP',
-        lat: 35.6762,
-        lon: 139.6503,
-        temperature: 28,
-        condition: 'Rain',
-        icon: '10d',
-      },
-    ];
-    setSavedLocations(mockLocations);
+  const loadSavedLocations = async () => {
+    try {
+      const stored = await AsyncStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const locations = JSON.parse(stored);
+        setSavedLocations(locations);
+        // Update weather for all saved locations
+        updateSavedLocationsWeather(locations);
+      }
+    } catch (error) {
+      console.error('Error loading saved locations:', error);
+    }
+  };
+
+  const updateSavedLocationsWeather = async (locations: SavedLocation[]) => {
+    try {
+      const updatedLocations = await Promise.all(
+        locations.map(async (location) => {
+          try {
+            const response = await fetch(
+              `https://api.openweathermap.org/data/2.5/weather?lat=${location.lat}&lon=${location.lon}&appid=dd3eed2b572cd5929a9f50b77007248d&units=metric`
+            );
+            
+            if (response.ok) {
+              const data = await response.json();
+              return {
+                ...location,
+                temperature: Math.round(data.main.temp),
+                condition: data.weather[0].main,
+                icon: data.weather[0].icon,
+              };
+            }
+            return location;
+          } catch (error) {
+            return location;
+          }
+        })
+      );
+      
+      setSavedLocations(updatedLocations);
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updatedLocations));
+    } catch (error) {
+      console.error('Error updating weather:', error);
+    }
+  };
+
+  const searchCities = async (query: string): Promise<CitySuggestion[]> => {
+    if (query.length < 2) return [];
+    
+    try {
+      const response = await fetch(
+        `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(query)}&limit=8&appid=dd3eed2b572cd5929a9f50b77007248d`
+      );
+      const data = await response.json();
+      
+      return data.map((item: any) => ({
+        name: item.name,
+        country: item.country,
+        state: item.state,
+        lat: item.lat,
+        lon: item.lon,
+      }));
+    } catch (error) {
+      console.error('City search error:', error);
+      return [];
+    }
+  };
+
+  const handleSearchInputChange = useCallback((text: string) => {
+    setSearchInput(text);
+    
+    if (text.length >= 2) {
+      setIsLoadingSuggestions(true);
+      const debounceTimeout = setTimeout(async () => {
+        const suggestions = await searchCities(text);
+        setCitySuggestions(suggestions);
+        setShowSuggestions(true);
+        setIsLoadingSuggestions(false);
+      }, 300);
+      
+      return () => clearTimeout(debounceTimeout);
+    } else {
+      setShowSuggestions(false);
+      setCitySuggestions([]);
+      setIsLoadingSuggestions(false);
+    }
+  }, []);
+
+  const addLocation = async (city: CitySuggestion) => {
+    try {
+      // Check if location already exists
+      const exists = savedLocations.some(
+        loc => Math.abs(loc.lat - city.lat) < 0.01 && Math.abs(loc.lon - city.lon) < 0.01
+      );
+      
+      if (exists) {
+        Alert.alert('Location exists', 'This location is already in your saved locations');
+        return;
+      }
+
+      // Fetch weather for the location
+      const response = await fetch(
+        `https://api.openweathermap.org/data/2.5/weather?lat=${city.lat}&lon=${city.lon}&appid=dd3eed2b572cd5929a9f50b77007248d&units=metric`
+      );
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch weather data');
+      }
+      
+      const data = await response.json();
+      
+      const newLocation: SavedLocation = {
+        id: `${city.lat}-${city.lon}-${Date.now()}`,
+        name: city.name,
+        country: city.country,
+        state: city.state,
+        lat: city.lat,
+        lon: city.lon,
+        temperature: Math.round(data.main.temp),
+        condition: data.weather[0].main,
+        icon: data.weather[0].icon,
+        dateAdded: Date.now(),
+      };
+
+      const updatedLocations = [...savedLocations, newLocation];
+      setSavedLocations(updatedLocations);
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updatedLocations));
+      
+      setShowAddModal(false);
+      setSearchInput('');
+      setShowSuggestions(false);
+      
+      Alert.alert('Success', `${city.name} has been added to your locations`);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to add location. Please try again.');
+      console.error('Error adding location:', error);
+    }
+  };
+
+  const removeLocation = (id: string, name: string) => {
+    Alert.alert(
+      'Remove Location',
+      `Are you sure you want to remove ${name} from your saved locations?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            const updatedLocations = savedLocations.filter(loc => loc.id !== id);
+            setSavedLocations(updatedLocations);
+            await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updatedLocations));
+          },
+        },
+      ]
+    );
+  };
+
+  const handleLocationPress = async (location: SavedLocation) => {
+    try {
+      setIsUpdatingWeather(true);
+      await fetchWeatherByCoords(location.lat, location.lon);
+      router.push('/(tabs)/');
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load weather for this location');
+    } finally {
+      setIsUpdatingWeather(false);
+    }
   };
 
   const convertTemperature = (temp: number): number => {
@@ -140,34 +319,42 @@ export default function LocationsScreen() {
     }
   };
 
-  const handleLocationPress = async (location: SavedLocation) => {
-    try {
-      await fetchWeatherByCoords(location.lat, location.lon);
-      // Navigate to weather screen - assuming you have navigation
-    } catch (error) {
-      Alert.alert('Error', 'Failed to load weather for this location');
-    }
+  const modalAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: modalScale.value }],
+  }));
+
+  const showModal = () => {
+    setShowAddModal(true);
+    modalScale.value = withSpring(1, { damping: 15, stiffness: 150 });
   };
 
-  const removeLocation = (id: string) => {
-    Alert.alert(
-      'Remove Location',
-      'Are you sure you want to remove this location?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: () => {
-            setSavedLocations(prev => prev.filter(loc => loc.id !== id));
-          },
-        },
-      ]
-    );
+  const hideModal = () => {
+    modalScale.value = withSpring(0, { damping: 15, stiffness: 150 });
+    setTimeout(() => {
+      setShowAddModal(false);
+      setSearchInput('');
+      setShowSuggestions(false);
+    }, 200);
   };
+
+  const renderCitySuggestion = ({ item }: { item: CitySuggestion }) => (
+    <TouchableOpacity
+      style={styles.suggestionItem}
+      onPress={() => addLocation(item)}
+    >
+      <Ionicons name="location-outline" size={18} color="#666" />
+      <View style={styles.suggestionTextContainer}>
+        <Text style={styles.suggestionCityName}>{item.name}</Text>
+        <Text style={styles.suggestionCountry}>
+          {item.state ? `${item.state}, ${item.country}` : item.country}
+        </Text>
+      </View>
+      <Ionicons name="add" size={20} color="#007AFF" />
+    </TouchableOpacity>
+  );
 
   const renderLocationItem = ({ item }: { item: SavedLocation }) => (
-    <Animated.View entering={FadeIn} style={styles.locationCard}>
+    <Animated.View entering={FadeIn.delay(100)} style={styles.locationCard}>
       <LinearGradient
         colors={getConditionGradient(item.condition)}
         style={styles.locationGradient}
@@ -177,19 +364,22 @@ export default function LocationsScreen() {
         <TouchableOpacity
           style={styles.locationContent}
           onPress={() => handleLocationPress(item)}
+          disabled={isUpdatingWeather}
         >
           <View style={styles.locationInfo}>
             <View style={styles.locationHeader}>
-              <Text style={styles.locationName}>{item.name}</Text>
+              <Text style={styles.locationName} numberOfLines={1}>{item.name}</Text>
               {item.isCurrentLocation && (
                 <View style={styles.currentLocationBadge}>
-                  <Ionicons name="location" size={12} color="#007AFF" />
+                  <Ionicons name="location" size={10} color="#007AFF" />
                   <Text style={styles.currentLocationText}>Current</Text>
                 </View>
               )}
             </View>
-            {item.country && (
-              <Text style={styles.locationCountry}>{item.country}</Text>
+            {(item.country || item.state) && (
+              <Text style={styles.locationCountry} numberOfLines={1}>
+                {item.state ? `${item.state}, ${item.country}` : item.country}
+              </Text>
             )}
             <Text style={styles.locationCondition}>{item.condition}</Text>
           </View>
@@ -209,32 +399,129 @@ export default function LocationsScreen() {
         {!item.isCurrentLocation && (
           <TouchableOpacity
             style={styles.removeButton}
-            onPress={() => removeLocation(item.id)}
+            onPress={() => removeLocation(item.id, item.name)}
           >
-            <Ionicons name="close" size={20} color="#FFFFFF" />
+            <Ionicons name="close" size={18} color="#FFFFFF" />
           </TouchableOpacity>
         )}
       </LinearGradient>
     </Animated.View>
   );
 
+  const renderEmptyState = () => (
+    <Animated.View entering={FadeIn.delay(300)} style={styles.emptyContainer}>
+      <Ionicons name="location-outline" size={64} color="#FFFFFF60" />
+      <Text style={styles.emptyTitle}>No Saved Locations</Text>
+      <Text style={styles.emptyText}>
+        Add your favorite cities to quickly check their weather
+      </Text>
+      <TouchableOpacity style={styles.addFirstButton} onPress={showModal}>
+        <Ionicons name="add" size={20} color="#007AFF" />
+        <Text style={styles.addFirstButtonText}>Add Your First Location</Text>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+
+  const allLocations = [currentLocationWeather, ...savedLocations].filter(Boolean) as SavedLocation[];
+
   return (
     <LinearGradient colors={['#4A90E2', '#7BB3F0']} style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
-        <Animated.View entering={FadeIn} style={styles.header}>
-          <Text style={styles.headerTitle}>My Locations</Text>
-          <TouchableOpacity style={styles.addButton}>
-            <Ionicons name="add" size={24} color="#FFFFFF" />
-          </TouchableOpacity>
-        </Animated.View>
+        {isLoadingCurrentLocation ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#FFFFFF" />
+            <Text style={styles.loadingText}>Loading your locations...</Text>
+          </View>
+        ) : allLocations.length === 0 ? (
+          renderEmptyState()
+        ) : (
+          <FlatList
+            data={allLocations}
+            renderItem={renderLocationItem}
+            keyExtractor={(item) => item.id}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.listContainer}
+            refreshing={false}
+            onRefresh={() => {
+              loadCurrentLocation();
+              updateSavedLocationsWeather(savedLocations);
+            }}
+            ListHeaderComponent={
+              <Animated.View entering={FadeIn} style={styles.header}>
+                <Text style={styles.headerTitle}>My Locations</Text>
+                <TouchableOpacity style={styles.addButton} onPress={showModal}>
+                  <Ionicons name="add" size={24} color="#FFFFFF" />
+                </TouchableOpacity>
+              </Animated.View>
+            }
+          />
+        )}
 
-        <FlatList
-          data={[currentLocationWeather, ...savedLocations].filter((loc): loc is SavedLocation => loc !== null)}
-          renderItem={renderLocationItem}
-          keyExtractor={(item) => item!.id}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.listContainer}
-        />
+        {/* Add Location Modal */}
+        <Modal
+          visible={showAddModal}
+          transparent
+          animationType="fade"
+          onRequestClose={hideModal}
+        >
+          <TouchableWithoutFeedback onPress={hideModal}>
+            <View style={styles.modalOverlay}>
+              <TouchableWithoutFeedback onPress={() => {}}>
+                <Animated.View style={[styles.modalContainer, modalAnimatedStyle]}>
+                  <BlurView intensity={95} style={styles.modalBlur}>
+                    <View style={styles.modalHeader}>
+                      <Text style={styles.modalTitle}>Add Location</Text>
+                      <TouchableOpacity onPress={hideModal}>
+                        <Ionicons name="close" size={24} color="#333" />
+                      </TouchableOpacity>
+                    </View>
+                    
+                    <View style={styles.searchContainer}>
+                      <Ionicons name="search" size={20} color="#666" />
+                      <TextInput
+                        style={styles.modalSearchInput}
+                        placeholder="Search for a city..."
+                        value={searchInput}
+                        onChangeText={handleSearchInputChange}
+                        autoFocus
+                        autoCorrect={false}
+                        autoCapitalize="words"
+                      />
+                    </View>
+
+                    {isLoadingSuggestions ? (
+                      <View style={styles.suggestionLoader}>
+                        <ActivityIndicator size="small" color="#666" />
+                        <Text style={styles.suggestionLoaderText}>Searching...</Text>
+                      </View>
+                    ) : showSuggestions && citySuggestions.length > 0 ? (
+                      <FlatList
+                        data={citySuggestions}
+                        renderItem={renderCitySuggestion}
+                        keyExtractor={(item, index) => `${item.lat}-${item.lon}-${index}`}
+                        style={styles.suggestionsList}
+                        keyboardShouldPersistTaps="handled"
+                      />
+                    ) : searchInput.length >= 2 && !isLoadingSuggestions ? (
+                      <View style={styles.noResults}>
+                        <Text style={styles.noResultsText}>No cities found</Text>
+                      </View>
+                    ) : null}
+                  </BlurView>
+                </Animated.View>
+              </TouchableWithoutFeedback>
+            </View>
+          </TouchableWithoutFeedback>
+        </Modal>
+
+        {isUpdatingWeather && (
+          <View style={styles.updateOverlay}>
+            <BlurView intensity={80} style={styles.updateBlur}>
+              <ActivityIndicator size="large" color="#FFFFFF" />
+              <Text style={styles.updateText}>Loading weather...</Text>
+            </BlurView>
+          </View>
+        )}
       </SafeAreaView>
     </LinearGradient>
   );
@@ -246,14 +533,14 @@ const styles = StyleSheet.create({
   },
   safeArea: {
     flex: 1,
-    paddingHorizontal: 25,
+    paddingHorizontal: 20,
     paddingTop: 10,
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 25,
     paddingVertical: 10,
   },
   headerTitle: {
@@ -263,16 +550,35 @@ const styles = StyleSheet.create({
   },
   addButton: {
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 20,
-    padding: 8,
+    borderRadius: 25,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  loadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    marginTop: 15,
+    fontWeight: '500',
   },
   listContainer: {
-    paddingBottom: 100,
+    paddingBottom: 120,
+    paddingTop: 10,
   },
   locationCard: {
     marginBottom: 15,
-    borderRadius: 15,
+    borderRadius: 18,
     overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
   },
   locationGradient: {
     position: 'relative',
@@ -285,17 +591,19 @@ const styles = StyleSheet.create({
   },
   locationInfo: {
     flex: 1,
+    marginRight: 15,
   },
   locationHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 5,
+    marginBottom: 6,
   },
   locationName: {
     color: '#FFFFFF',
     fontSize: 20,
     fontWeight: '600',
     marginRight: 10,
+    flex: 1,
   },
   currentLocationBadge: {
     flexDirection: 'row',
@@ -303,7 +611,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     paddingHorizontal: 8,
-    paddingVertical: 2,
+    paddingVertical: 3,
   },
   currentLocationText: {
     color: '#007AFF',
@@ -314,33 +622,180 @@ const styles = StyleSheet.create({
   locationCountry: {
     color: '#FFFFFF',
     fontSize: 14,
-    opacity: 0.8,
-    marginBottom: 5,
+    opacity: 0.9,
+    marginBottom: 6,
   },
   locationCondition: {
     color: '#FFFFFF',
     fontSize: 16,
-    opacity: 0.9,
+    opacity: 0.95,
     textTransform: 'capitalize',
+    fontWeight: '500',
   },
   weatherInfo: {
     alignItems: 'center',
   },
   temperature: {
     color: '#FFFFFF',
-    fontSize: 24,
+    fontSize: 26,
     fontWeight: '300',
-    marginBottom: 5,
+    marginBottom: 8,
   },
   removeButton: {
     position: 'absolute',
-    top: 10,
-    right: 10,
+    top: 12,
+    right: 12,
     backgroundColor: 'rgba(0, 0, 0, 0.3)',
     borderRadius: 15,
     width: 30,
     height: 30,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  emptyContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 40,
+  },
+  emptyTitle: {
+    color: '#FFFFFF',
+    fontSize: 24,
+    fontWeight: '600',
+    marginTop: 20,
+    marginBottom: 10,
+  },
+  emptyText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    textAlign: 'center',
+    opacity: 0.8,
+    lineHeight: 22,
+    marginBottom: 30,
+  },
+  addFirstButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 25,
+    paddingVertical: 15,
+    borderRadius: 25,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  addFirstButtonText: {
+    color: '#007AFF',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainer: {
+    width: width - 40,
+    maxHeight: '70%',
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  modalBlur: {
+    padding: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#333',
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    marginBottom: 15,
+  },
+  modalSearchInput: {
+    flex: 1,
+    fontSize: 16,
+    marginLeft: 10,
+    color: '#333',
+  },
+  suggestionsList: {
+    maxHeight: 300,
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 5,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  suggestionTextContainer: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  suggestionCityName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  suggestionCountry: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 2,
+  },
+  suggestionLoader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 20,
+  },
+  suggestionLoaderText: {
+    color: '#666',
+    marginLeft: 8,
+    fontSize: 14,
+  },
+  noResults: {
+    paddingVertical: 20,
+    alignItems: 'center',
+  },
+  noResultsText: {
+    color: '#666',
+    fontSize: 14,
+  },
+  updateOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  updateBlur: {
+    paddingHorizontal: 30,
+    paddingVertical: 20,
+    borderRadius: 15,
+    alignItems: 'center',
+  },
+  updateText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    marginTop: 10,
+    fontWeight: '500',
   },
 });
