@@ -17,7 +17,7 @@ import {
   TextInput,
   TouchableOpacity,
   TouchableWithoutFeedback,
-  View
+  View,
 } from 'react-native';
 import Animated, {
   FadeIn,
@@ -68,6 +68,7 @@ export default function LocationsScreen() {
   
   // Animation values
   const modalScale = useSharedValue(0);
+  const refreshRotation = useSharedValue(0);
   
   useEffect(() => {
     loadCurrentLocation();
@@ -82,7 +83,6 @@ export default function LocationsScreen() {
           accuracy: Location.Accuracy.Balanced,
         });
         
-        // Fetch weather for current location
         const response = await fetch(
           `https://api.openweathermap.org/data/2.5/weather?lat=${location.coords.latitude}&lon=${location.coords.longitude}&appid=dd3eed2b572cd5929a9f50b77007248d&units=metric`
         );
@@ -117,7 +117,6 @@ export default function LocationsScreen() {
       if (stored) {
         const locations = JSON.parse(stored);
         setSavedLocations(locations);
-        // Update weather for all saved locations
         updateSavedLocationsWeather(locations);
       }
     } catch (error) {
@@ -201,7 +200,6 @@ export default function LocationsScreen() {
 
   const addLocation = async (city: CitySuggestion) => {
     try {
-      // Check if location already exists
       const exists = savedLocations.some(
         loc => Math.abs(loc.lat - city.lat) < 0.01 && Math.abs(loc.lon - city.lon) < 0.01
       );
@@ -211,7 +209,6 @@ export default function LocationsScreen() {
         return;
       }
 
-      // Fetch weather for the location
       const response = await fetch(
         `https://api.openweathermap.org/data/2.5/weather?lat=${city.lat}&lon=${city.lon}&appid=dd3eed2b572cd5929a9f50b77007248d&units=metric`
       );
@@ -239,11 +236,10 @@ export default function LocationsScreen() {
       setSavedLocations(updatedLocations);
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updatedLocations));
       
-      setShowAddModal(false);
+      hideModal();
       setSearchInput('');
       setShowSuggestions(false);
       
-      Alert.alert('Success', `${city.name} has been added to your locations`);
     } catch (error) {
       Alert.alert('Error', 'Failed to add location. Please try again.');
       console.error('Error adding location:', error);
@@ -253,7 +249,7 @@ export default function LocationsScreen() {
   const removeLocation = (id: string, name: string) => {
     Alert.alert(
       'Remove Location',
-      `Are you sure you want to remove ${name} from your saved locations?`,
+      `Remove ${name} from your saved locations?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -300,27 +296,26 @@ export default function LocationsScreen() {
     return iconMap[iconCode] || 'partly-sunny';
   };
 
-  const getConditionGradient = (condition: string): readonly [string, string] => {
+  const getConditionColor = (condition: string): string => {
     const conditionLower = condition.toLowerCase();
     switch (conditionLower) {
-      case 'clear':
-        return ['#FFE259', '#FFA751'] as const;
-      case 'clouds':
-        return ['#BDC3C7', '#95A5A6'] as const;
+      case 'clear': return '#FFB347';
+      case 'clouds': return '#87CEEB';
       case 'rain':
-      case 'drizzle':
-        return ['#4A6FA5', '#166BA0'] as const;
-      case 'thunderstorm':
-        return ['#2C3E50', '#34495E'] as const;
-      case 'snow':
-        return ['#E8F4FD', '#D6EAF8'] as const;
-      default:
-        return ['#4A90E2', '#7BB3F0'] as const;
+      case 'drizzle': return '#4A90E2';
+      case 'thunderstorm': return '#8A2BE2';
+      case 'snow': return '#E0E0E0';
+      default: return '#87CEEB';
     }
   };
 
   const modalAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: modalScale.value }],
+    opacity: modalScale.value,
+  }));
+
+  const refreshAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${refreshRotation.value}deg` }],
   }));
 
   const showModal = () => {
@@ -337,123 +332,140 @@ export default function LocationsScreen() {
     }, 200);
   };
 
+  const handleRefresh = () => {
+    refreshRotation.value = withSpring(refreshRotation.value + 360, { damping: 15, stiffness: 150 });
+    loadCurrentLocation();
+    updateSavedLocationsWeather(savedLocations);
+  };
+
   const renderCitySuggestion = ({ item }: { item: CitySuggestion }) => (
     <TouchableOpacity
       style={styles.suggestionItem}
       onPress={() => addLocation(item)}
     >
-      <Ionicons name="location-outline" size={18} color="#666" />
+      <View style={styles.suggestionIcon}>
+        <Ionicons name="location-outline" size={18} color="#007AFF" />
+      </View>
       <View style={styles.suggestionTextContainer}>
         <Text style={styles.suggestionCityName}>{item.name}</Text>
         <Text style={styles.suggestionCountry}>
           {item.state ? `${item.state}, ${item.country}` : item.country}
         </Text>
       </View>
-      <Ionicons name="add" size={20} color="#007AFF" />
+      <Ionicons name="add-circle-outline" size={22} color="#007AFF" />
     </TouchableOpacity>
   );
 
-  const renderLocationItem = ({ item }: { item: SavedLocation }) => (
-    <Animated.View entering={FadeIn.delay(100)} style={styles.locationCard}>
-      <LinearGradient
-        colors={getConditionGradient(item.condition)}
-        style={styles.locationGradient}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
+  const renderLocationItem = ({ item, index }: { item: SavedLocation; index: number }) => (
+    <Animated.View entering={FadeIn.delay(index * 100)} style={styles.locationCard}>
+      <TouchableOpacity
+        style={[styles.locationContent, { backgroundColor: getConditionColor(item.condition) + '20' }]}
+        onPress={() => handleLocationPress(item)}
+        disabled={isUpdatingWeather}
       >
-        <TouchableOpacity
-          style={styles.locationContent}
-          onPress={() => handleLocationPress(item)}
-          disabled={isUpdatingWeather}
-        >
-          <View style={styles.locationInfo}>
-            <View style={styles.locationHeader}>
-              <Text style={styles.locationName} numberOfLines={1}>{item.name}</Text>
-              {item.isCurrentLocation && (
-                <View style={styles.currentLocationBadge}>
-                  <Ionicons name="location" size={10} color="#007AFF" />
-                  <Text style={styles.currentLocationText}>Current</Text>
-                </View>
-              )}
-            </View>
-            {(item.country || item.state) && (
-              <Text style={styles.locationCountry} numberOfLines={1}>
-                {item.state ? `${item.state}, ${item.country}` : item.country}
-              </Text>
+        <View style={styles.locationLeft}>
+          <View style={styles.locationHeader}>
+            <Text style={styles.locationName} numberOfLines={1}>{item.name}</Text>
+            {item.isCurrentLocation && (
+              <View style={styles.currentLocationBadge}>
+                <Ionicons name="location" size={10} color="#007AFF" />
+                <Text style={styles.currentLocationText}>Current</Text>
+              </View>
             )}
-            <Text style={styles.locationCondition}>{item.condition}</Text>
           </View>
           
-          <View style={styles.weatherInfo}>
-            <Text style={styles.temperature}>
-              {convertTemperature(item.temperature)}°{unit}
+          {(item.country || item.state) && (
+            <Text style={styles.locationCountry} numberOfLines={1}>
+              {item.state ? `${item.state}, ${item.country}` : item.country}
             </Text>
+          )}
+          
+          <Text style={styles.locationCondition}>{item.condition}</Text>
+        </View>
+        
+        <View style={styles.locationRight}>
+          <Text style={styles.temperature}>
+            {convertTemperature(item.temperature)}°{unit}
+          </Text>
+          <View style={[styles.iconContainer, { backgroundColor: getConditionColor(item.condition) + '30' }]}>
             <Ionicons
               name={getWeatherIcon(item.icon) as any}
-              size={40}
-              color="#FFFFFF"
+              size={32}
+              color={getConditionColor(item.condition)}
             />
           </View>
-        </TouchableOpacity>
+        </View>
         
         {!item.isCurrentLocation && (
           <TouchableOpacity
             style={styles.removeButton}
             onPress={() => removeLocation(item.id, item.name)}
           >
-            <Ionicons name="close" size={18} color="#FFFFFF" />
+            <Ionicons name="close" size={16} color="#FF6B6B" />
           </TouchableOpacity>
         )}
-      </LinearGradient>
+      </TouchableOpacity>
     </Animated.View>
   );
 
   const renderEmptyState = () => (
     <Animated.View entering={FadeIn.delay(300)} style={styles.emptyContainer}>
-      <Ionicons name="location-outline" size={64} color="#FFFFFF60" />
+      <View style={styles.emptyIcon}>
+        <Ionicons name="location-outline" size={64} color="#FFFFFF40" />
+      </View>
       <Text style={styles.emptyTitle}>No Saved Locations</Text>
       <Text style={styles.emptyText}>
-        Add your favorite cities to quickly check their weather
+        Add your favorite cities to quickly check their weather conditions
       </Text>
       <TouchableOpacity style={styles.addFirstButton} onPress={showModal}>
-        <Ionicons name="add" size={20} color="#007AFF" />
-        <Text style={styles.addFirstButtonText}>Add Your First Location</Text>
+        <Ionicons name="add" size={20} color="#FFFFFF" />
+        <Text style={styles.addFirstButtonText}>Add Location</Text>
       </TouchableOpacity>
     </Animated.View>
+  );
+
+  const renderHeader = () => (
+    <View style={styles.header}>
+      <View style={styles.headerLeft}>
+        <Text style={styles.headerTitle}>Locations</Text>
+        <Text style={styles.headerSubtitle}>
+          {savedLocations.length} saved location{savedLocations.length !== 1 ? 's' : ''}
+        </Text>
+      </View>
+      <View style={styles.headerActions}>
+        <TouchableOpacity style={styles.refreshButton} onPress={handleRefresh}>
+          <Animated.View style={refreshAnimatedStyle}>
+            <Ionicons name="refresh" size={20} color="#FFFFFF" />
+          </Animated.View>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.addButton} onPress={showModal}>
+          <Ionicons name="add" size={20} color="#FFFFFF" />
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 
   const allLocations = [currentLocationWeather, ...savedLocations].filter(Boolean) as SavedLocation[];
 
   return (
-    <LinearGradient colors={['#4A90E2', '#7BB3F0']} style={styles.container}>
+    <LinearGradient colors={['#667eea', '#764ba2']} style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
         {isLoadingCurrentLocation ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#FFFFFF" />
-            <Text style={styles.loadingText}>Loading your locations...</Text>
+            <Text style={styles.loadingText}>Loading locations...</Text>
           </View>
-        ) : allLocations.length === 0 ? (
-          renderEmptyState()
         ) : (
           <FlatList
             data={allLocations}
             renderItem={renderLocationItem}
             keyExtractor={(item) => item.id}
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.listContainer}
+            contentContainerStyle={allLocations.length === 0 ? styles.emptyListContainer : styles.listContainer}
+            ListHeaderComponent={allLocations.length > 0 ? renderHeader : null}
+            ListEmptyComponent={renderEmptyState}
             refreshing={false}
-            onRefresh={() => {
-              loadCurrentLocation();
-              updateSavedLocationsWeather(savedLocations);
-            }}
-            ListHeaderComponent={
-              <Animated.View entering={FadeIn} style={styles.header}>
-                <Text style={styles.headerTitle}>My Locations</Text>
-                <TouchableOpacity style={styles.addButton} onPress={showModal}>
-                  <Ionicons name="add" size={24} color="#FFFFFF" />
-                </TouchableOpacity>
-              </Animated.View>
-            }
+            onRefresh={handleRefresh}
           />
         )}
 
@@ -470,8 +482,8 @@ export default function LocationsScreen() {
                 <Animated.View style={[styles.modalContainer, modalAnimatedStyle]}>
                   <BlurView intensity={95} style={styles.modalBlur}>
                     <View style={styles.modalHeader}>
-                      <Text style={styles.modalTitle}>Add Location</Text>
-                      <TouchableOpacity onPress={hideModal}>
+                      <Text style={styles.modalTitle}>Add New Location</Text>
+                      <TouchableOpacity onPress={hideModal} style={styles.closeButton}>
                         <Ionicons name="close" size={24} color="#333" />
                       </TouchableOpacity>
                     </View>
@@ -486,13 +498,19 @@ export default function LocationsScreen() {
                         autoFocus
                         autoCorrect={false}
                         autoCapitalize="words"
+                        placeholderTextColor="#999"
                       />
+                      {searchInput.length > 0 && (
+                        <TouchableOpacity onPress={() => setSearchInput('')}>
+                          <Ionicons name="close-circle" size={20} color="#999" />
+                        </TouchableOpacity>
+                      )}
                     </View>
 
                     {isLoadingSuggestions ? (
                       <View style={styles.suggestionLoader}>
                         <ActivityIndicator size="small" color="#666" />
-                        <Text style={styles.suggestionLoaderText}>Searching...</Text>
+                        <Text style={styles.suggestionLoaderText}>Searching cities...</Text>
                       </View>
                     ) : showSuggestions && citySuggestions.length > 0 ? (
                       <FlatList
@@ -501,10 +519,13 @@ export default function LocationsScreen() {
                         keyExtractor={(item, index) => `${item.lat}-${item.lon}-${index}`}
                         style={styles.suggestionsList}
                         keyboardShouldPersistTaps="handled"
+                        showsVerticalScrollIndicator={false}
                       />
                     ) : searchInput.length >= 2 && !isLoadingSuggestions ? (
                       <View style={styles.noResults}>
+                        <Ionicons name="location-outline" size={32} color="#ccc" />
                         <Text style={styles.noResultsText}>No cities found</Text>
+                        <Text style={styles.noResultsSubtext}>Try a different spelling</Text>
                       </View>
                     ) : null}
                   </BlurView>
@@ -533,27 +554,7 @@ const styles = StyleSheet.create({
   },
   safeArea: {
     flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 10,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 25,
-    paddingVertical: 10,
-  },
-  headerTitle: {
-    color: '#FFFFFF',
-    fontSize: 28,
-    fontWeight: '600',
-  },
-  addButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 25,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
+    paddingTop: 35,
   },
   loadingContainer: {
     flex: 1,
@@ -566,30 +567,67 @@ const styles = StyleSheet.create({
     marginTop: 15,
     fontWeight: '500',
   },
-  listContainer: {
-    paddingBottom: 120,
-    paddingTop: 10,
-  },
-  locationCard: {
-    marginBottom: 15,
-    borderRadius: 18,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  locationGradient: {
-    position: 'relative',
-  },
-  locationContent: {
+  header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
+    alignItems: 'flex-start',
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 25,
   },
-  locationInfo: {
+  headerLeft: {
+    flex: 1,
+  },
+  headerTitle: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: '700',
+  },
+  headerSubtitle: {
+    color: '#FFFFFF80',
+    fontSize: 14,
+    marginTop: 4,
+    fontWeight: '400',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  refreshButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    borderRadius: 20,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  addButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    borderRadius: 20,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  listContainer: {
+    paddingBottom: 120,
+  },
+  emptyListContainer: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  locationCard: {
+    marginHorizontal: 20,
+    marginBottom: 15,
+  },
+  locationContent: {
+    borderRadius: 20,
+    padding: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    position: 'relative',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  locationLeft: {
     flex: 1,
     marginRight: 15,
   },
@@ -600,7 +638,7 @@ const styles = StyleSheet.create({
   },
   locationName: {
     color: '#FFFFFF',
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '600',
     marginRight: 10,
     flex: 1,
@@ -609,46 +647,49 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
   currentLocationText: {
     color: '#007AFF',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '600',
     marginLeft: 2,
   },
   locationCountry: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    opacity: 0.9,
-    marginBottom: 6,
+    color: '#FFFFFF80',
+    fontSize: 13,
+    marginBottom: 4,
+    fontWeight: '400',
   },
   locationCondition: {
     color: '#FFFFFF',
-    fontSize: 16,
-    opacity: 0.95,
+    fontSize: 15,
     textTransform: 'capitalize',
     fontWeight: '500',
   },
-  weatherInfo: {
+  locationRight: {
     alignItems: 'center',
   },
   temperature: {
     color: '#FFFFFF',
-    fontSize: 26,
-    fontWeight: '300',
+    fontSize: 24,
+    fontWeight: '600',
     marginBottom: 8,
+  },
+  iconContainer: {
+    borderRadius: 20,
+    padding: 8,
   },
   removeButton: {
     position: 'absolute',
     top: 12,
     right: 12,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
-    borderRadius: 15,
-    width: 30,
-    height: 30,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 12,
+    width: 24,
+    height: 24,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -658,80 +699,85 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 40,
   },
+  emptyIcon: {
+    marginBottom: 20,
+  },
   emptyTitle: {
     color: '#FFFFFF',
     fontSize: 24,
     fontWeight: '600',
-    marginTop: 20,
     marginBottom: 10,
+    textAlign: 'center',
   },
   emptyText: {
-    color: '#FFFFFF',
+    color: '#FFFFFF80',
     fontSize: 16,
     textAlign: 'center',
-    opacity: 0.8,
-    lineHeight: 22,
+    lineHeight: 24,
     marginBottom: 30,
   },
   addFirstButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
     paddingHorizontal: 25,
     paddingVertical: 15,
     borderRadius: 25,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
   },
   addFirstButtonText: {
-    color: '#007AFF',
+    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
     marginLeft: 8,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   modalContainer: {
     width: width - 40,
-    maxHeight: '70%',
-    borderRadius: 20,
+    maxHeight: '75%',
+    borderRadius: 25,
     overflow: 'hidden',
   },
   modalBlur: {
-    padding: 20,
+    padding: 25,
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 25,
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: '600',
     color: '#333',
   },
+  closeButton: {
+    padding: 5,
+  },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F5F5F5',
-    borderRadius: 12,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 15,
     paddingHorizontal: 15,
     paddingVertical: 12,
-    marginBottom: 15,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#E9ECEF',
   },
   modalSearchInput: {
     flex: 1,
     fontSize: 16,
     marginLeft: 10,
     color: '#333',
+    fontWeight: '400',
   },
   suggestionsList: {
     maxHeight: 300,
@@ -739,14 +785,16 @@ const styles = StyleSheet.create({
   suggestionItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
+    paddingVertical: 15,
     paddingHorizontal: 5,
     borderBottomWidth: 1,
     borderBottomColor: '#F0F0F0',
   },
+  suggestionIcon: {
+    marginRight: 12,
+  },
   suggestionTextContainer: {
     flex: 1,
-    marginLeft: 12,
   },
   suggestionCityName: {
     fontSize: 16,
@@ -762,7 +810,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 20,
+    paddingVertical: 30,
   },
   suggestionLoaderText: {
     color: '#666',
@@ -770,12 +818,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   noResults: {
-    paddingVertical: 20,
+    paddingVertical: 40,
     alignItems: 'center',
   },
   noResultsText: {
     color: '#666',
+    fontSize: 16,
+    fontWeight: '500',
+    marginTop: 10,
+  },
+  noResultsSubtext: {
+    color: '#999',
     fontSize: 14,
+    marginTop: 5,
   },
   updateOverlay: {
     position: 'absolute',

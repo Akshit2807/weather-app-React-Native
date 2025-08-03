@@ -2,14 +2,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Dimensions,
   FlatList,
   Keyboard,
-  KeyboardAvoidingView,
+  Linking,
   Platform,
   SafeAreaView,
   ScrollView,
@@ -22,15 +22,12 @@ import {
   TouchableWithoutFeedback,
   View,
 } from 'react-native';
-import MapView, { Marker, Region } from 'react-native-maps';
 import Animated, {
   FadeIn,
-  SlideInDown,
-  SlideOutDown,
+  interpolate,
   useAnimatedStyle,
   useSharedValue,
-  withSpring,
-  withTiming
+  withSpring
 } from 'react-native-reanimated';
 import { useWeather } from '../../context/WeatherContext';
 
@@ -47,8 +44,7 @@ interface CitySuggestion {
 export default function WeatherScreen() {
   const [searchInput, setSearchInput] = useState('');
   const [showMap, setShowMap] = useState(false);
-  const [mapRegion, setMapRegion] = useState<Region | null>(null);
-  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [showSearchModal, setShowSearchModal] = useState(false);
   const [markerCoords, setMarkerCoords] = useState<{latitude: number, longitude: number} | null>(null);
   const [citySuggestions, setCitySuggestions] = useState<CitySuggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -56,15 +52,13 @@ export default function WeatherScreen() {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [mapMoving, setMapMoving] = useState(false);
   
-  const mapRef = useRef<MapView>(null);
   const searchInputRef = useRef<TextInput>(null);
   const debounceTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mapMoveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
   
   // Animated values
-  const searchBarOpacity = useSharedValue(0.8);
-  const mapScale = useSharedValue(1);
+  const searchAnimation = useSharedValue(0);
+  const mapAnimation = useSharedValue(0);
   
   const { 
     weather, 
@@ -75,7 +69,6 @@ export default function WeatherScreen() {
     fetchWeatherByCoords,
     setUnit, 
     clearError, 
-    retryLastSearch 
   } = useWeather();
 
   useEffect(() => {
@@ -84,12 +77,6 @@ export default function WeatherScreen() {
 
   useEffect(() => {
     if (weather?.coord) {
-      setMapRegion({
-        latitude: weather.coord.lat,
-        longitude: weather.coord.lon,
-        latitudeDelta: 0.1,
-        longitudeDelta: 0.1,
-      });
       setMarkerCoords({
         latitude: weather.coord.lat,
         longitude: weather.coord.lon,
@@ -162,75 +149,74 @@ export default function WeatherScreen() {
   const handleCitySelect = async (city: CitySuggestion) => {
     setSearchInput('');
     setShowSuggestions(false);
-    setIsSearchFocused(false);
-    Keyboard.dismiss();
+    hideSearchOverlay();
     
     clearError();
     await fetchWeatherByCoords(city.lat, city.lon);
-    setShowMap(false);
   };
 
   const handleSearch = async () => {
     if (searchInput.trim()) {
       setShowSuggestions(false);
-      setIsSearchFocused(false);
-      Keyboard.dismiss();
+      hideSearchOverlay();
       
       clearError();
       await fetchWeather(searchInput.trim());
       setSearchInput('');
-      setShowMap(false);
     }
   };
 
-  const handleSearchFocus = () => {
-    setIsSearchFocused(true);
-    searchBarOpacity.value = withTiming(1, { duration: 200 });
+  const showSearchOverlay = () => {
+    setShowSearchModal(true);
+    searchAnimation.value = withSpring(1, { damping: 15, stiffness: 150 });
+    setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 200);
   };
 
-  const handleSearchBlur = () => {
-    if (!showSuggestions) {
-      setIsSearchFocused(false);
-      searchBarOpacity.value = withTiming(0.8, { duration: 200 });
-    }
+  const hideSearchOverlay = () => {
+    Keyboard.dismiss();
+    searchAnimation.value = withSpring(0, { damping: 15, stiffness: 150 });
+    setTimeout(() => {
+      setShowSearchModal(false);
+      setShowSuggestions(false);
+    }, 200);
   };
 
-  const handleMapPress = useCallback((event: any) => {
-    const { latitude, longitude } = event.nativeEvent.coordinate;
-    setMarkerCoords({ latitude, longitude });
-    setMapMoving(true);
+  const toggleMap = () => {
+    setShowMap(!showMap);
+    mapAnimation.value = withSpring(showMap ? 0 : 1, { damping: 15, stiffness: 150 });
+  };
+
+  const openInMaps = () => {
+    if (!markerCoords) return;
     
-    if (mapMoveTimeout.current) {
-      clearTimeout(mapMoveTimeout.current);
-    }
+    const { latitude, longitude } = markerCoords;
+    const label = weather?.name || 'Weather Location';
     
-    mapMoveTimeout.current = setTimeout(async () => {
-      try {
-        await fetchWeatherByCoords(latitude, longitude);
-        setMapMoving(false);
-      } catch (error) {
-        setMapMoving(false);
-      }
-    }, 800);
-  }, [fetchWeatherByCoords]);
+    const scheme = Platform.select({
+      ios: `maps:0,0?q=${label}@${latitude},${longitude}`,
+      android: `geo:0,0?q=${latitude},${longitude}(${label})`,
+    });
+    
+    if (scheme) {
+      Linking.openURL(scheme).catch(() => {
+        // Fallback to Google Maps web
+        const url = `https://www.google.com/maps?q=${latitude},${longitude}`;
+        Linking.openURL(url);
+      });
+    }
+  };
 
   const getCurrentLocation = async () => {
     try {
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
-      const newRegion = {
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-        latitudeDelta: 0.1,
-        longitudeDelta: 0.1,
-      };
-      setMapRegion(newRegion);
       setMarkerCoords({
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
       });
-      mapRef.current?.animateToRegion(newRegion, 1000);
       await fetchWeatherByCoords(location.coords.latitude, location.coords.longitude);
     } catch (error) {
       Alert.alert('Error', 'Could not get current location');
@@ -241,8 +227,8 @@ export default function WeatherScreen() {
     return unit === 'F' ? Math.round((temp * 9/5) + 32) : Math.round(temp);
   };
 
-  const getWeatherGradient = (): readonly [string, string] => {
-    if (!weather) return ['#4A90E2', '#7BB3F0'] as const;
+  const getWeatherGradient = (): readonly [string, string, string] => {
+    if (!weather) return ['#1e3c72', '#2a5298', '#4A90E2'] as const;
     
     const condition = weather.weather[0]?.main?.toLowerCase();
     const hour = new Date().getHours();
@@ -250,18 +236,22 @@ export default function WeatherScreen() {
     
     switch (condition) {
       case 'clear':
-        return isNight ? ['#1e3c72', '#2a5298'] as const : ['#FFE259', '#FFA751'] as const;
+        return isNight 
+          ? ['#0f0c29', '#24243e', '#313862'] as const 
+          : ['#ff9a9e', '#fecfef', '#fecfef'] as const;
       case 'clouds':
-        return isNight ? ['#232526', '#414345'] as const : ['#bdc3c7', '#95a5a6'] as const;
+        return isNight 
+          ? ['#232526', '#414345', '#5C5C5C'] as const 
+          : ['#bdc3c7', '#95a5a6', '#7f8c8d'] as const;
       case 'rain':
       case 'drizzle':
-        return ['#4A6FA5', '#166BA0'] as const;
+        return ['#3a6186', '#89253e', '#2c3e50'] as const;
       case 'thunderstorm':
-        return ['#2C3E50', '#34495E'] as const;
+        return ['#2C3E50', '#4A6741', '#27AE60'] as const;
       case 'snow':
-        return ['#E8F4FD', '#D6EAF8'] as const;
+        return ['#E8F4FD', '#D6EAF8', '#AED6F1'] as const;
       default:
-        return ['#4A90E2', '#7BB3F0'] as const;
+        return ['#667eea', '#764ba2', '#667eea'] as const;
     }
   };
 
@@ -281,21 +271,28 @@ export default function WeatherScreen() {
   };
 
   // Animated styles
-  const searchBarAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: searchBarOpacity.value,
-    transform: [
-      { scale: withSpring(isSearchFocused ? 1.02 : 1) }
-    ],
-  }));
+  const searchBarAnimatedStyle = useAnimatedStyle(() => {
+    const opacity = interpolate(searchAnimation.value, [0, 1], [0, 1]);
+    const translateY = interpolate(searchAnimation.value, [0, 1], [-50, 0]);
+    
+    return {
+      opacity,
+      transform: [{ translateY }],
+    };
+  });
 
-  const mapAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [
-      { scale: mapScale.value }
-    ],
-  }));
+  const mapAnimatedStyle = useAnimatedStyle(() => {
+    const height = interpolate(mapAnimation.value, [0, 1], [0, 300]);
+    const opacity = interpolate(mapAnimation.value, [0, 1], [0, 1]);
+    
+    return {
+      height,
+      opacity,
+    };
+  });
 
   const renderInitialLoader = () => (
-    <Animated.View entering={FadeIn} style={styles.loaderContainer}>
+    <View style={styles.loaderContainer}>
       <View style={styles.weatherLoaderIcon}>
         <Ionicons name="cloud" size={80} color="#FFFFFF" />
         <Animated.View entering={FadeIn.delay(500)}>
@@ -304,7 +301,7 @@ export default function WeatherScreen() {
       </View>
       <Text style={styles.loaderText}>Getting your location...</Text>
       <ActivityIndicator size="large" color="#FFFFFF" style={{ marginTop: 20 }} />
-    </Animated.View>
+    </View>
   );
 
   const renderCitySuggestion = ({ item }: { item: CitySuggestion }) => (
@@ -322,258 +319,216 @@ export default function WeatherScreen() {
     </TouchableOpacity>
   );
 
-  const renderSearchSuggestions = () => {
-    if (!showSuggestions) return null;
+  const renderSearchOverlay = () => {
+    if (!showSearchModal) return null;
 
     return (
-      <Animated.View 
-        entering={SlideInDown.duration(200)} 
-        exiting={SlideOutDown.duration(200)}
-        style={styles.suggestionsContainer}
-      >
-        <BlurView intensity={95} style={styles.suggestionsBlur}>
-          {isLoadingSuggestions ? (
-            <View style={styles.suggestionLoader}>
-              <ActivityIndicator size="small" color="#666" />
-              <Text style={styles.suggestionLoaderText}>Searching...</Text>
+      <Animated.View style={[styles.searchOverlay, searchBarAnimatedStyle]}>
+        <TouchableWithoutFeedback onPress={hideSearchOverlay}>
+          <View style={styles.searchOverlayBackground} />
+        </TouchableWithoutFeedback>
+        
+        <View style={styles.searchContainer}>
+          <BlurView intensity={95} style={styles.searchBlur}>
+            <View style={styles.searchHeader}>
+              <Text style={styles.searchTitle}>Search Cities</Text>
+              <TouchableOpacity onPress={hideSearchOverlay}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
             </View>
-          ) : citySuggestions.length > 0 ? (
-            <FlatList
-              data={citySuggestions}
-              renderItem={renderCitySuggestion}
-              keyExtractor={(item, index) => `${item.lat}-${item.lon}-${index}`}
-              style={styles.suggestionsList}
-              keyboardShouldPersistTaps="handled"
-            />
-          ) : (
-            <View style={styles.noSuggestions}>
-              <Text style={styles.noSuggestionsText}>No cities found</Text>
+            
+            <View style={styles.searchInputContainer}>
+              <Ionicons name="search" size={20} color="#666" />
+              <TextInput
+                ref={searchInputRef}
+                style={styles.searchInput}
+                placeholder="Type city name..."
+                value={searchInput}
+                onChangeText={handleSearchInputChange}
+                onSubmitEditing={handleSearch}
+                returnKeyType="search"
+                autoCorrect={false}
+                autoCapitalize="words"
+              />
+              {searchInput.length > 0 && (
+                <TouchableOpacity onPress={() => setSearchInput('')}>
+                  <Ionicons name="close-circle" size={20} color="#999" />
+                </TouchableOpacity>
+              )}
             </View>
-          )}
-        </BlurView>
+
+            {isLoadingSuggestions ? (
+              <View style={styles.suggestionLoader}>
+                <ActivityIndicator size="small" color="#666" />
+                <Text style={styles.suggestionLoaderText}>Searching...</Text>
+              </View>
+            ) : showSuggestions && citySuggestions.length > 0 ? (
+              <FlatList
+                data={citySuggestions}
+                renderItem={renderCitySuggestion}
+                keyExtractor={(item, index) => `${item.lat}-${item.lon}-${index}`}
+                style={styles.suggestionsList}
+                keyboardShouldPersistTaps="handled"
+              />
+            ) : searchInput.length >= 2 && !isLoadingSuggestions ? (
+              <View style={styles.noSuggestions}>
+                <Text style={styles.noSuggestionsText}>No cities found</Text>
+              </View>
+            ) : null}
+          </BlurView>
+        </View>
       </Animated.View>
     );
   };
 
   const renderErrorState = () => (
-    <Animated.View entering={FadeIn} style={styles.centerContainer}>
+    <View style={styles.centerContainer}>
       <Ionicons name="alert-circle" size={64} color="#FF6B6B" />
       <Text style={styles.errorText}>{error}</Text>
       <TouchableOpacity style={styles.retryButton} onPress={() => setIsInitialLoading(false)}>
         <Text style={styles.retryButtonText}>Try Again</Text>
       </TouchableOpacity>
-    </Animated.View>
+    </View>
   );
 
   const renderWeatherData = () => {
     if (!weather) return null;
 
     return (
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.container}
-      >
-        <TouchableWithoutFeedback onPress={() => {
-          Keyboard.dismiss();
-          setShowSuggestions(false);
-          setIsSearchFocused(false);
-        }}>
-          <View style={styles.mainContainer}>
-            {/* Enhanced Search Bar */}
-            <Animated.View style={[styles.searchContainer, searchBarAnimatedStyle]}>
-              <BlurView intensity={80} style={styles.searchInputContainer}>
-                <Ionicons name="search" size={20} color="#FFFFFF80" style={styles.searchIcon} />
-                <TextInput
-                  ref={searchInputRef}
-                  style={styles.searchInput}
-                  placeholder="Search for a city..."
-                  placeholderTextColor="#FFFFFF80"
-                  value={searchInput}
-                  onChangeText={handleSearchInputChange}
-                  onSubmitEditing={handleSearch}
-                  onFocus={handleSearchFocus}
-                  onBlur={handleSearchBlur}
-                  returnKeyType="search"
-                  autoCorrect={false}
-                  autoCapitalize="words"
-                />
-                {searchInput.length > 0 && (
-                  <TouchableOpacity 
-                    onPress={() => {
-                      setSearchInput('');
-                      setShowSuggestions(false);
-                    }}
-                    style={styles.clearButton}
-                  >
-                    <Ionicons name="close" size={18} color="#FFFFFF80" />
-                  </TouchableOpacity>
-                )}
-                <TouchableOpacity onPress={handleSearch} style={styles.searchButton}>
-                  <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
-                </TouchableOpacity>
-              </BlurView>
-            </Animated.View>
-
-            {/* Search Suggestions - Outside ScrollView */}
-            {renderSearchSuggestions()}
-
-            {/* Main Content */}
-            {!isSearchFocused && !showSuggestions && (
-              <ScrollView 
-                ref={scrollViewRef}
-                showsVerticalScrollIndicator={false} 
-                style={styles.scrollContainer}
-                contentContainerStyle={styles.scrollContent}
-                keyboardShouldPersistTaps="handled"
-              >
-                {/* Header */}
-                <Animated.View entering={FadeIn.delay(100)} style={styles.header}>
-                  <View style={styles.locationContainer}>
-                    <Ionicons name="location" size={18} color="#FFFFFF" />
-                    <Text style={styles.locationText} numberOfLines={1}>{weather.name}</Text>
-                  </View>
-                  
-                  <TouchableOpacity 
-                    style={styles.mapToggleButton}
-                    onPress={() => {
-                      setShowMap(!showMap);
-                      mapScale.value = withSpring(showMap ? 1 : 1.02);
-                    }}
-                  >
-                    <Ionicons name={showMap ? "list" : "map"} size={24} color="#FFFFFF" />
-                  </TouchableOpacity>
-                </Animated.View>
-
-                {showMap ? (
-                  <Animated.View 
-                    entering={FadeIn.duration(300)} 
-                    style={[styles.mapContainer, mapAnimatedStyle]}
-                  >
-                    {mapRegion && (
-                      <MapView
-                        ref={mapRef}
-                        style={styles.map}
-                        initialRegion={mapRegion}
-                        onPress={handleMapPress}
-                        showsUserLocation={true}
-                        showsMyLocationButton={false}
-                        scrollEnabled={true}
-                        zoomEnabled={true}
-                        rotateEnabled={false}
-                        pitchEnabled={false}
-                        loadingEnabled={true}
-                        loadingBackgroundColor="#4A90E2"
-                        loadingIndicatorColor="#FFFFFF"
-                      >
-                        {markerCoords && (
-                          <Marker 
-                            coordinate={markerCoords}
-                            anchor={{ x: 0.5, y: 0.5 }}
-                          >
-                            <View style={styles.customMarker}>
-                              <Ionicons name="location" size={30} color="#FF6B6B" />
-                            </View>
-                          </Marker>
-                        )}
-                      </MapView>
-                    )}
-                    
-                    {mapMoving && (
-                      <View style={styles.mapLoadingOverlay}>
-                        <ActivityIndicator size="small" color="#FFFFFF" />
-                        <Text style={styles.mapLoadingText}>Loading weather...</Text>
-                      </View>
-                    )}
-                    
-                    <TouchableOpacity style={styles.locateButton} onPress={getCurrentLocation}>
-                      <Ionicons name="locate" size={24} color="#007AFF" />
-                    </TouchableOpacity>
-                  </Animated.View>
-                ) : (
-                  <>
-                    {/* Main temperature display */}
-                    <Animated.View entering={FadeIn.delay(200)} style={styles.mainWeather}>
-                      <View style={styles.temperatureContainer}>
-                        <Text style={styles.mainTemperature}>
-                          {convertTemperature(weather.main.temp)}°
-                        </Text>
-                        <Text style={styles.feelsLike}>
-                          Feels like {convertTemperature(weather.main.feels_like || weather.main.temp)}°
-                        </Text>
-                      </View>
-                      
-                      <View style={styles.weatherIconContainer}>
-                        <Ionicons 
-                          name={getWeatherIcon(weather.weather[0].icon) as any} 
-                          size={120} 
-                          color="#FFFFFF" 
-                        />
-                      </View>
-                    </Animated.View>
-
-                    {/* Weather description */}
-                    <Animated.View entering={FadeIn.delay(300)} style={styles.descriptionContainer}>
-                      <Text style={styles.weatherDescription}>
-                        {weather.weather[0].description}
-                      </Text>
-                    </Animated.View>
-
-                    {/* Unit toggle */}
-                    <Animated.View entering={FadeIn.delay(400)} style={styles.unitToggleContainer}>
-                      <Text style={styles.unitLabel}>°C</Text>
-                      <Switch
-                        value={unit === 'F'}
-                        onValueChange={(value) => setUnit(value ? 'F' : 'C')}
-                        trackColor={{ false: '#FFFFFF40', true: '#FFFFFF40' }}
-                        thumbColor="#FFFFFF"
-                        ios_backgroundColor="#FFFFFF40"
-                      />
-                      <Text style={styles.unitLabel}>°F</Text>
-                    </Animated.View>
-
-                    {/* Weather details cards */}
-                    <Animated.View entering={FadeIn.delay(500)} style={styles.detailsGrid}>
-                      <Animated.View entering={FadeIn.delay(550)} style={styles.detailCard}>
-                        <View style={styles.detailHeader}>
-                          <Ionicons name="water" size={20} color="#FFFFFF" />
-                          <Text style={styles.detailLabel}>HUMIDITY</Text>
-                        </View>
-                        <Text style={styles.detailValue}>{weather.main.humidity}%</Text>
-                      </Animated.View>
-
-                      <Animated.View entering={FadeIn.delay(600)} style={styles.detailCard}>
-                        <View style={styles.detailHeader}>
-                          <Ionicons name="leaf" size={20} color="#FFFFFF" />
-                          <Text style={styles.detailLabel}>WIND</Text>
-                        </View>
-                        <Text style={styles.detailValue}>{weather.wind.speed} m/s</Text>
-                      </Animated.View>
-
-                      <Animated.View entering={FadeIn.delay(650)} style={styles.detailCard}>
-                        <View style={styles.detailHeader}>
-                          <Ionicons name="eye" size={20} color="#FFFFFF" />
-                          <Text style={styles.detailLabel}>VISIBILITY</Text>
-                        </View>
-                        <Text style={styles.detailValue}>
-                          {weather.visibility ? `${Math.round(weather.visibility / 1000)} km` : 'N/A'}
-                        </Text>
-                      </Animated.View>
-
-                      <Animated.View entering={FadeIn.delay(700)} style={styles.detailCard}>
-                        <View style={styles.detailHeader}>
-                          <Ionicons name="speedometer" size={20} color="#FFFFFF" />
-                          <Text style={styles.detailLabel}>PRESSURE</Text>
-                        </View>
-                        <Text style={styles.detailValue}>{weather.main.pressure} hPa</Text>
-                      </Animated.View>
-                    </Animated.View>
-                  </>
-                )}
-              </ScrollView>
-            )}
+      <View style={styles.container}>
+        {/* Top Navigation */}
+        <View style={styles.topNav}>
+          <View style={styles.unitToggle}>
+            <Text style={[styles.unitText, unit === 'C' && styles.unitTextActive]}>°C</Text>
+            <Switch
+              value={unit === 'F'}
+              onValueChange={(value) => setUnit(value ? 'F' : 'C')}
+              trackColor={{ false: '#FFFFFF30', true: '#FFFFFF30' }}
+              thumbColor="#FFFFFF"
+              ios_backgroundColor="#FFFFFF30"
+              style={styles.switch}
+            />
+            <Text style={[styles.unitText, unit === 'F' && styles.unitTextActive]}>°F</Text>
           </View>
-        </TouchableWithoutFeedback>
-      </KeyboardAvoidingView>
+          
+          <TouchableOpacity style={styles.searchButton} onPress={showSearchOverlay}>
+            <Ionicons name="search" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView 
+          ref={scrollViewRef}
+          showsVerticalScrollIndicator={false}
+          style={styles.scrollContainer}
+          contentContainerStyle={styles.scrollContent}
+          removeClippedSubviews={true}
+        >
+          {/* Location Header */}
+          <Animated.View entering={FadeIn.delay(100)} style={styles.locationHeader}>
+            <Ionicons name="location" size={20} color="#FFFFFF80" />
+            <Text style={styles.locationText}>{weather.name}</Text>
+          </Animated.View>
+
+          {/* Main Weather Display */}
+          <Animated.View entering={FadeIn.delay(200)} style={styles.mainWeatherContainer}>
+            <View style={styles.temperatureSection}>
+              <Text style={styles.mainTemperature}>
+                {convertTemperature(weather.main.temp)}°
+              </Text>
+              <Text style={styles.condition}>
+                {weather.weather[0].description}
+              </Text>
+              <Text style={styles.feelsLike}>
+                Feels like {convertTemperature(weather.main.feels_like || weather.main.temp)}°
+              </Text>
+            </View>
+            
+            <View style={styles.iconSection}>
+              <Ionicons 
+                name={getWeatherIcon(weather.weather[0].icon) as any} 
+                size={100} 
+                color="#FFFFFF" 
+              />
+            </View>
+          </Animated.View>
+
+          {/* Weather Details */}
+          <Animated.View entering={FadeIn.delay(300)} style={styles.detailsContainer}>
+            <View style={styles.detailRow}>
+              <View style={styles.detailItem}>
+                <Ionicons name="water" size={24} color="#FFFFFF80" />
+                <Text style={styles.detailLabel}>Humidity</Text>
+                <Text style={styles.detailValue}>{weather.main.humidity}%</Text>
+              </View>
+              
+              <View style={styles.detailItem}>
+                <Ionicons name="leaf" size={24} color="#FFFFFF80" />
+                <Text style={styles.detailLabel}>Wind</Text>
+                <Text style={styles.detailValue}>{weather.wind.speed} m/s</Text>
+              </View>
+            </View>
+
+            <View style={styles.detailRow}>
+              <View style={styles.detailItem}>
+                <Ionicons name="eye" size={24} color="#FFFFFF80" />
+                <Text style={styles.detailLabel}>Visibility</Text>
+                <Text style={styles.detailValue}>
+                  {weather.visibility ? `${Math.round(weather.visibility / 1000)} km` : 'N/A'}
+                </Text>
+              </View>
+              
+              <View style={styles.detailItem}>
+                <Ionicons name="speedometer" size={24} color="#FFFFFF80" />
+                <Text style={styles.detailLabel}>Pressure</Text>
+                <Text style={styles.detailValue}>{weather.main.pressure} hPa</Text>
+              </View>
+            </View>
+          </Animated.View>
+
+          {/* Map Toggle Button */}
+          <Animated.View entering={FadeIn.delay(400)} style={styles.mapToggleContainer}>
+            <TouchableOpacity style={styles.mapToggleButton} onPress={toggleMap}>
+              <Ionicons name={showMap ? "location" : "map"} size={20} color="#FFFFFF" />
+              <Text style={styles.mapToggleText}>
+                {showMap ? "Hide Location" : "Show Location"}
+              </Text>
+            </TouchableOpacity>
+          </Animated.View>
+
+          {/* Location Info */}
+          <Animated.View style={[styles.locationContainer, mapAnimatedStyle]}>
+            {showMap && markerCoords && (
+              <View style={styles.locationInfo}>
+                <View style={styles.locationHeaderInfo}>
+                  <Ionicons name="location" size={24} color="#FFFFFF" />
+                  <Text style={styles.locationTitle}>Current Location</Text>
+                </View>
+                
+                <View style={styles.coordinatesContainer}>
+                  <Text style={styles.coordinatesText}>
+                    {markerCoords.latitude.toFixed(4)}°, {markerCoords.longitude.toFixed(4)}°
+                  </Text>
+                </View>
+                
+                <View style={styles.locationActions}>
+                  <TouchableOpacity style={styles.actionButton} onPress={openInMaps}>
+                    <Ionicons name="map-outline" size={18} color="#007AFF" />
+                    <Text style={styles.actionButtonText}>Open in Maps</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity style={styles.actionButton} onPress={getCurrentLocation}>
+                    <Ionicons name="locate-outline" size={18} color="#007AFF" />
+                    <Text style={styles.actionButtonText}>Update Location</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </Animated.View>
+        </ScrollView>
+
+        {/* Search Overlay */}
+        {renderSearchOverlay()}
+      </View>
     );
   };
 
@@ -595,17 +550,6 @@ const styles = StyleSheet.create({
   },
   safeArea: {
     flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 45,
-  },
-  mainContainer: {
-    flex: 1,
-  },
-  scrollContainer: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingBottom: 120,
   },
   loaderContainer: {
     flex: 1,
@@ -631,74 +575,277 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     fontWeight: '500',
   },
-  searchContainer: {
+  topNav: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 15,
+    paddingBottom: 10,
+  },
+  unitToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  unitText: {
+    color: '#FFFFFF60',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  unitTextActive: {
+    color: '#FFFFFF',
+  },
+  switch: {
+    marginHorizontal: 8,
+    transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }],
+  },
+  searchButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    borderRadius: 20,
+    padding: 10,
+  },
+  scrollContainer: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 120,
+  },
+  locationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    marginBottom: 30,
+  },
+  locationText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '500',
+    marginLeft: 8,
+  },
+  mainWeatherContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 30,
+    marginBottom: 40,
+  },
+  temperatureSection: {
+    flex: 1,
+  },
+  mainTemperature: {
+    color: '#FFFFFF',
+    fontSize: 80,
+    fontWeight: '100',
+    lineHeight: 80,
+  },
+  condition: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '400',
+    textTransform: 'capitalize',
+    marginTop: 5,
+  },
+  feelsLike: {
+    color: '#FFFFFF80',
+    fontSize: 16,
+    fontWeight: '400',
+    marginTop: 5,
+  },
+  iconSection: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  detailsContainer: {
+    paddingHorizontal: 20,
+    marginBottom: 30,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  detailItem: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 16,
+    padding: 20,
+    flex: 0.48,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  detailLabel: {
+    color: '#FFFFFF80',
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  detailValue: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  mapToggleContainer: {
+    paddingHorizontal: 20,
+    marginBottom: 20,
+  },
+  mapToggleButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    borderRadius: 25,
+    paddingVertical: 15,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  mapToggleText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  mapContainer: {
+    marginHorizontal: 20,
+    borderRadius: 20,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  locationContainer: {
+    marginHorizontal: 20,
+    marginBottom: 20,
+  },
+  locationInfo: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  locationHeaderInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginBottom: 15,
+  },
+  locationTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '600',
+    marginLeft: 10,
+  },
+  coordinatesContainer: {
+    marginBottom: 20,
+  },
+  coordinatesText: {
+    color: '#FFFFFF80',
+    fontSize: 16,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    textAlign: 'center',
+  },
+  locationActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  actionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 15,
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+  },
+  actionButtonText: {
+    color: '#007AFF',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 6,
+  },
+  searchOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     zIndex: 1000,
+  },
+  searchOverlayBackground: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  searchContainer: {
+    margin: 20,
+    marginTop: 80,
+    maxHeight: '70%',
+  },
+  searchBlur: {
+    borderRadius: 20,
+    overflow: 'hidden',
+    padding: 20,
+  },
+  searchHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  searchTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#333',
   },
   searchInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 25,
-    overflow: 'hidden',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
-  },
-  searchIcon: {
-    marginRight: 10,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    marginBottom: 15,
   },
   searchInput: {
     flex: 1,
-    color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: '500',
-  },
-  clearButton: {
-    padding: 5,
-    marginRight: 5,
-  },
-  searchButton: {
-    padding: 5,
-  },
-  suggestionsContainer: {
-    position: 'absolute',
-    top: 70,
-    left: 0,
-    right: 0,
-    maxHeight: 250,
-    zIndex: 999,
-    marginHorizontal: 5,
-  },
-  suggestionsBlur: {
-    borderRadius: 15,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
+    marginLeft: 10,
+    color: '#333',
   },
   suggestionsList: {
-    maxHeight: 240,
+    maxHeight: 250,
   },
   suggestionItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
+    paddingVertical: 12,
+    paddingHorizontal: 5,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
+    borderBottomColor: '#F0F0F0',
   },
   suggestionTextContainer: {
-    marginLeft: 12,
     flex: 1,
+    marginLeft: 12,
   },
   suggestionCityName: {
-    color: '#333',
     fontSize: 16,
     fontWeight: '600',
+    color: '#333',
   },
   suggestionCountry: {
-    color: '#666',
     fontSize: 13,
+    color: '#666',
     marginTop: 2,
   },
   suggestionLoader: {
@@ -719,183 +866,6 @@ const styles = StyleSheet.create({
   noSuggestionsText: {
     color: '#666',
     fontSize: 14,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 25,
-    marginTop: 10,
-  },
-  locationContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  locationText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '600',
-    marginLeft: 6,
-  },
-  mapToggleButton: {
-    padding: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 25,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  mapContainer: {
-    height: 350,
-    borderRadius: 20,
-    overflow: 'hidden',
-    marginBottom: 25,
-    position: 'relative',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  map: {
-    flex: 1,
-  },
-  customMarker: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mapLoadingOverlay: {
-    position: 'absolute',
-    top: 15,
-    left: 15,
-    right: 15,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mapLoadingText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    marginLeft: 8,
-    fontWeight: '500',
-  },
-  locateButton: {
-    position: 'absolute',
-    bottom: 15,
-    right: 15,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 25,
-    width: 50,
-    height: 50,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  mainWeather: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 25,
-  },
-  temperatureContainer: {
-    flex: 1,
-  },
-  mainTemperature: {
-    color: '#FFFFFF',
-    fontSize: 96,
-    fontWeight: '100',
-    lineHeight: 96,
-  },
-  feelsLike: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    opacity: 0.9,
-    marginTop: 8,
-    fontWeight: '500',
-  },
-  weatherIconContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  descriptionContainer: {
-    marginBottom: 30,
-  },
-  weatherDescription: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: '400',
-    textTransform: 'capitalize',
-  },
-  unitToggleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: 25,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    alignSelf: 'center',
-    marginBottom: 30,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  unitLabel: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-    marginHorizontal: 12,
-  },
-  detailsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    marginBottom: 30,
-  },
-  detailCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: 16,
-    padding: 18,
-    width: (width - 60) / 2,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  detailHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  detailLabel: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '600',
-    marginLeft: 8,
-    opacity: 0.9,
-    letterSpacing: 0.5,
-  },
-  detailValue: {
-    color: '#FFFFFF',
-    fontSize: 22,
-    fontWeight: '300',
   },
   centerContainer: {
     flex: 1,
