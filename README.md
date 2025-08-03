@@ -1,50 +1,98 @@
-# Welcome to your Expo app 👋
+# 🌦️ Weather App - React Native
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A sleek, simple, and intuitive weather application built with **React Native** and **Expo**. Get real-time weather data and forecasts for any city around the globe, right in your pocket.
 
-## Get started
+---
 
-1. Install dependencies
+## ✨ Features
 
-   ```bash
-   npm install
-   ```
+* **Real-Time Weather:** Instantly get the current temperature, conditions, humidity, and wind speed.
+* **Hourly Forecasts:** Plan your day with a detailed forecast for the next few hours.
+* **Interactive Map Selection:** Choose your location by simply dragging and dropping a pin on a map.
+* **Global Search:** Find weather information for any city in the world.
+* **Clean UI:** A minimalist and user-friendly interface for a seamless experience.
 
-2. Start the app
+---
 
-   ```bash
-   npx expo start
-   ```
+## 📱 App Screenshots
 
-In the output, you'll find options to open the app in a
+<p align="center">
+  <!-- Add your app screenshots here! -->
+  <img src="https://github.com/Akshit2807/weather-app-React-Native/blob/master/demo/Screenshot_20250803_230309.jpg" width="250" alt="Screenshot 1">
+  &nbsp; &nbsp; &nbsp;
+  <img src="https://github.com/Akshit2807/weather-app-React-Native/blob/master/demo/Screenshot_20250803_230341.jpg" width="250" alt="Screenshot 2">
+  &nbsp; &nbsp; &nbsp;
+  <img src="https://github.com/Akshit2807/weather-app-React-Native/blob/master/demo/Screenshot_20250803_230412.jpg" width="250" alt="Screenshot 3">
+</p>
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+---
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+## 🛠️ Tech Stack
 
-## Get a fresh project
+* **Core:** React Native, Expo
+* **API:** [OpenWeatherMap API](https://openweathermap.org/api) for weather data.
+* **Styling:** Native Stylesheets
+* **Linting & Formatting:** ESLint, Prettier
 
-When you're ready, run:
+---
 
-```bash
-npm run reset-project
-```
+## 🚀 Getting Started
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+To get a local copy up and running, follow these simple steps.
 
-## Learn more
+### Prerequisites
 
-To learn more about developing your project with Expo, look at the following resources:
+Make sure you have the following installed on your system:
+* [Node.js](https://nodejs.org/) (LTS version recommended)
+* [Expo Go](https://expo.dev/client) app on your mobile device (iOS or Android)
+* An API key from [OpenWeatherMap](https://openweathermap.org/api)
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+### Installation & Setup
 
-## Join the community
+1.  **Clone the repository:**
+    ```sh
+    git clone [https://github.com/Akshit2807/weather-app-React-Native.git](https://github.com/Akshit2807/weather-app-React-Native.git)
+    ```
 
-Join our community of developers creating universal apps.
+2.  **Navigate to the project directory:**
+    ```sh
+    cd weather-app-React-Native
+    ```
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+3.  **Install dependencies:**
+    ```sh
+    npm install
+    ```
+
+4.  **Add your API Key:**
+    Create a `config.js` file in the root directory and add your OpenWeatherMap API key.
+    ```javascript
+    // config.js
+    export const API_KEY = 'YOUR_API_KEY_HERE';
+    ```
+
+5.  **Start the development server:**
+    ```sh
+    npx expo start
+    ```
+    Scan the QR code with the Expo Go app on your phone, and you're good to go!
+
+---
+
+## 🤝 Contributing
+
+Contributions make the open-source community an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
+
+If you have a suggestion that would make this better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement".
+
+1.  Fork the Project
+2.  Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3.  Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4.  Push to the Branch (`git push origin feature/AmazingFeature`)
+5.  Open a Pull Request
+
+---
+
+## 📄 License
+
+Distributed under the MIT License. See `LICENSE` for more information.
