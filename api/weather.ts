@@ -35,9 +35,13 @@ export interface GeocodingData {
   state?: string;
 }
 
-const API_KEY = 'dd3eed2b572cd5929a9f50b77007248d';
 const BASE_URL = 'https://api.openweathermap.org/data/2.5/weather';
 const GEOCODING_URL = 'https://api.openweathermap.org/geo/1.0/direct';
+const API_KEY = process.env.EXPO_PUBLIC_WEATHER_API_KEY;
+
+if (!API_KEY) {
+  throw new Error('Missing environment variable: EXPO_PUBLIC_WEATHER_API_KEY');
+}
 
 // Simple cache to reduce API calls
 const weatherCache = new Map<string, { data: WeatherData; timestamp: number }>();

@@ -115,7 +115,7 @@ export default function WeatherScreen() {
     
     try {
       const response = await fetch(
-        `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(query)}&limit=5&appid=dd3eed2b572cd5929a9f50b77007248d`
+        `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(query)}&limit=5&appid=${process.env.EXPO_PUBLIC_WEATHER_API_KEY}`
       );
       const data = await response.json();
       

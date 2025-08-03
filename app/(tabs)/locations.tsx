@@ -84,7 +84,7 @@ export default function LocationsScreen() {
         });
         
         const response = await fetch(
-          `https://api.openweathermap.org/data/2.5/weather?lat=${location.coords.latitude}&lon=${location.coords.longitude}&appid=dd3eed2b572cd5929a9f50b77007248d&units=metric`
+          `https://api.openweathermap.org/data/2.5/weather?lat=${location.coords.latitude}&lon=${location.coords.longitude}&appid=${process.env.EXPO_PUBLIC_WEATHER_API_KEY}&units=metric`
         );
         
         if (response.ok) {
@@ -130,7 +130,7 @@ export default function LocationsScreen() {
         locations.map(async (location) => {
           try {
             const response = await fetch(
-              `https://api.openweathermap.org/data/2.5/weather?lat=${location.lat}&lon=${location.lon}&appid=dd3eed2b572cd5929a9f50b77007248d&units=metric`
+              `https://api.openweathermap.org/data/2.5/weather?lat=${location.lat}&lon=${location.lon}&appid=${process.env.EXPO_PUBLIC_WEATHER_API_KEY}&units=metric`
             );
             
             if (response.ok) {
@@ -161,7 +161,7 @@ export default function LocationsScreen() {
     
     try {
       const response = await fetch(
-        `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(query)}&limit=8&appid=dd3eed2b572cd5929a9f50b77007248d`
+        `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(query)}&limit=8&appid=${process.env.EXPO_PUBLIC_WEATHER_API_KEY}`
       );
       const data = await response.json();
       
@@ -210,7 +210,7 @@ export default function LocationsScreen() {
       }
 
       const response = await fetch(
-        `https://api.openweathermap.org/data/2.5/weather?lat=${city.lat}&lon=${city.lon}&appid=dd3eed2b572cd5929a9f50b77007248d&units=metric`
+        `https://api.openweathermap.org/data/2.5/weather?lat=${city.lat}&lon=${city.lon}&appid=${process.env.EXPO_PUBLIC_WEATHER_API_KEY}&units=metric`
       );
       
       if (!response.ok) {
